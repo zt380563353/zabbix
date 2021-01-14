@@ -1,0 +1,293 @@
+#! /usr/local/easyops/python/bin/python
+# _*_coding: utf-8_*_
+
+import requests
+import logging
+import os
+import sys
+import datetime
+import json
+from requests.packages import urllib3
+
+reload(sys)
+sys.setdefaultencoding('utf-8')
+
+# create logger object
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# create a file handler
+logger_handler = logging.StreamHandler(stream=sys.stdout)
+logger_handler.setLevel(logging.DEBUG)
+
+# create a logging format
+formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] [%(lineno)d] %(message)s', '%Y-%m-%d %H:%M:%S')
+logger_handler.setFormatter(formatter)
+
+# add the handlers to the logger
+logger.addHandler(logger_handler)
+
+# zabbix url及账户密码
+zabbix_url = 'http://192.168.100.70/zabbix/api_jsonrpc.php'
+zabbix_user = 'Admin'
+zabbix_passwd = 'zabbix'
+
+
+class EasyOpsResourceExcept(Exception):
+    """异常基类"""
+    code = 3000
+
+
+# HTTP Exception
+class IllegalURLError(EasyOpsResourceExcept):
+    """非法 URL"""
+    code = 100
+
+
+class UnsupportedHTTPMethodError(EasyOpsResourceExcept):
+    """非法 HTTP Method"""
+    code = 101
+
+
+class HTTPStatusCodeError(EasyOpsResourceExcept):
+    """HTTP 请求返回码错误 """
+    code = 103
+
+
+class HTTPRequestParamsError(EasyOpsResourceExcept):
+    """HTTP 请求参数错误 """
+    code = 104
+
+
+# EasyOps Component Exception
+class ReturnCodeError(EasyOpsResourceExcept):
+    """EasyOps 服务请求返回状态错误"""
+    code = 200
+
+
+class ZabbixTools():
+    def __init__(self, url=None, user=None, password=None):
+        self.url = url
+        self.user = user
+        self.password = password
+
+        self.headers = {
+            'Content-Type': 'application/json-rpc'
+        }
+
+    #发送http请求
+    def http_request(self, url, method='GET', headers=None, **kwargs):
+        """common http request"""
+        # examine the url
+        if not (url.startswith('http://') or url.startswith('https://')):
+            logger.error(u'url: {url}'.format(url=url))
+            raise exception.IllegalURLError(u'the url should be start with \'http(s)://\'')
+
+        # examine the http method
+        method = str.upper(method)
+        http_methods = ['GET', 'OPTIONS', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
+        if method not in http_methods:
+            raise exception.UnsupportedHTTPMethodError(u'unsupported http method: {method}'.format(method=method))
+
+        return requests.request(url=url, method=method, headers=headers, **kwargs)
+
+    #发送zabbix请求
+    def zabbix_http(self, data):
+
+        urllib3.disable_warnings()
+
+        proxy_handler = {'http': None, 'https': None}
+
+        http_ret = self.http_request(zabbix_url, 'POST', headers=self.headers, proxies=proxy_handler, verify=False,json=data)
+        if http_ret.status_code == 200:
+            try:
+                ret_obj = http_ret.json()
+                result = ret_obj.get('result')
+                if result:
+                    return result
+                else:
+                    return ret_obj
+            except Exception as e:
+                logging.error(u'zabbix_http error:{} '.format(e))
+        else:
+            logging.error(http_ret.text)
+            raise exception.HTTPStatusCodeError(
+                u"the http response status code: "u"{status_code}".format(status_code=http_ret.status_code)
+            )
+
+    # 获取zabbix认证
+    def get_zabbix_auth_token(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "user.login",
+            "params": {
+                "user": self.user,
+                "password": self.password
+            },
+            "id": 1
+        }
+        return self.zabbix_http(data)
+      
+    #获取监控项  
+    def get_zabbix_monitor(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "item.get",
+            "params":{
+                "output": "extend",
+                "sortfield": "name"
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data)
+      
+    #获取主机信息  
+    def get_zabbix_host_info(self, hostname):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "host.get",
+            "params": {
+                #"filter": {
+                #    "host": hostname
+                #}
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data)
+
+    #获取告警策略 
+    def get_zabbix_action_info(self, hostname):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "host.get",
+            "params": {
+                #"filter": {
+                #    "host": hostname
+                #}
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data)
+      
+
+    #获取mediatype
+    def get_zabbix_mediatype(self, hostname):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "mediatype.get",
+            "params": {
+                "output": "extend"
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data)
+ 
+    #获取action
+    def get_zabbix_action(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "action.get",
+            "params": {
+                "output": "extend",
+                "selectOperations": "extend",
+                "selectRecoveryOperations": "extend",
+                "selectFilter": "extend",
+                "filter": {
+                    #"eventsource": 1
+                }
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data)
+
+    #修改action的状态，1为disable，0为enable。action_id = 10为gawain_test
+    def update_zabbix_action(self, status):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "action.update",
+            "params": {
+                "actionid" : "10",
+                "status": status
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data) 
+      
+    #查询zabbix problems
+    def zabbix_get_problems(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "problem.get",
+            "params": {
+                "output": "extend",
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data)  
+ 
+    #查询zabbix告警事件
+    def zabbix_get_alert(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "alert.get",
+            "params": {
+                "output": "extend",
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data) 
+
+    #查询zabbix event
+    def zabbix_get_event(self):
+        data = {
+            "jsonrpc": "2.0",
+            "method": "event.get",
+            "params": {
+                "output": "extend",
+            },
+            "auth": self.get_zabbix_auth_token(),
+            "id": 1
+        }
+        return self.zabbix_http(data) 
+      
+      
+if __name__ == "__main__":
+    # 实例化
+    Zabbix = ZabbixTools(url=zabbix_url, user=zabbix_user, password=zabbix_passwd)
+    #zabbix_monitor = Zabbix.get_zabbix_monitor()
+    #print zabbix_monitor
+    #zabbix_host_info = Zabbix.get_zabbix_host_info("111")
+    #print zabbix_host_info    
+    #zabbix_host_info = Zabbix.get_zabbix_host_info("111")
+    #print zabbix_host_info   
+    #zabbix_media_type = Zabbix.get_zabbix_mediatype("111")
+    #print zabbix_media_type      
+    #zabbix_action_list = Zabbix.get_zabbix_action()
+    #print zabbix_action_list 
+    #for zabbix_action in zabbix_action_list:
+    #    print zabbix_action
+    #1为disable，0为enable
+    #status = "0"
+    #zabbix_action = Zabbix.update_zabbix_action(status)
+    #print zabbix_action    
+    #zabbix_action = Zabbix.get_zabbix_action()
+    #print zabbix_action  
+    #zabbix_problems = Zabbix.zabbix_get_problems()
+    #print zabbix_problems
+    #zabbix_event = Zabbix.zabbix_get_event()
+    #print zabbix_event
+    
+    zabbix_alert_list = Zabbix.zabbix_get_alert()
+    for zabbix_alert in zabbix_alert_list:
+        print '----'
+        print zabbix_alert
+        print '----'
+    
