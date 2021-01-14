@@ -28,8 +28,8 @@ logger_handler.setFormatter(formatter)
 logger.addHandler(logger_handler)
 
 # zabbix url及账户密码
-zabbix_url = 'http://192.168.100.70/zabbix/api_jsonrpc.php'
-zabbix_user = 'Admin'
+zabbix_url = 'http://xxx.xxx.xxx.xx/zabbix/api_jsonrpc.php'
+zabbix_user = 'zabbix'
 zabbix_passwd = 'zabbix'
 
 
